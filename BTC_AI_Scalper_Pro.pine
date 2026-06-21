@@ -430,8 +430,10 @@ score += in_asia or in_us ? 1 : 0
 score += (htf_bull and bull_sweep) or (not htf_bull and bear_sweep) ? 1 : 0
 
 // FIX: sig_buy/sig_sell now trigger on OB OR sweep — widens detection window (Audit4 #B)
-sig_buy  = htf_bull and (at_dem_ob or bull_sweep) and score >= i_strat_min_score
-sig_sell = not htf_bull and (at_sup_ob or bear_sweep) and score >= i_strat_min_score
+mom_bull = bull_div or bull_pin or vsa_manip
+mom_bear = bear_div or bear_pin or vsa_manip
+sig_buy  = htf_bull and (at_dem_ob or bull_sweep) and mom_bull and score >= i_strat_min_score
+sig_sell = not htf_bull and (at_sup_ob or bear_sweep) and mom_bear and score >= i_strat_min_score
 
 // FIX: Plot sig_buy/sig_sell on chart for historical visual trail (Audit4 #A)
 plotshape(sig_buy, "Buy Zone", shape.triangleup, location.belowbar, color.new(#00E676, 0), size=size.small)
@@ -484,8 +486,8 @@ if i_dash_on and barstate.islast
     table.cell(dash, 1, 6, str.tostring(atr_val, "#.##"), text_color=#FFD700, text_size=size.tiny)
 
     // SL suggestion (Increased for Crypto)
-    sl_val = atr_val * 2.0
-    table.cell(dash, 0, 7, "SL (2.0×ATR)", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    sl_val = atr_val * i_strat_sl_mult
+    table.cell(dash, 0, 7, "SL (" + str.tostring(i_strat_sl_mult) + "×ATR)", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
     table.cell(dash, 1, 7, str.tostring(sl_val, "#.##"), text_color=#FF9800, text_size=size.tiny)
 
     // Volume
@@ -544,13 +546,18 @@ var float tp_price = na
 
 if sig_buy and strategy.position_size == 0
     strategy.entry("Long", strategy.long)
-    sl_price := close - (atr_val * i_strat_sl_mult)
-    tp_price := close + (atr_val * i_strat_tp_mult)
 
 if sig_sell and strategy.position_size == 0
     strategy.entry("Short", strategy.short)
-    sl_price := close + (atr_val * i_strat_sl_mult)
-    tp_price := close - (atr_val * i_strat_tp_mult)
+
+// Fix: Calculate TP/SL relative to actual entry price
+if strategy.position_size > 0 and strategy.position_size[1] == 0
+    sl_price := strategy.opentrades.entry_price(0) - (atr_val[1] * i_strat_sl_mult)
+    tp_price := strategy.opentrades.entry_price(0) + (atr_val[1] * i_strat_tp_mult)
+
+if strategy.position_size < 0 and strategy.position_size[1] == 0
+    sl_price := strategy.opentrades.entry_price(0) + (atr_val[1] * i_strat_sl_mult)
+    tp_price := strategy.opentrades.entry_price(0) - (atr_val[1] * i_strat_tp_mult)
 
 if strategy.position_size > 0
     strategy.exit("Exit Long", "Long", stop=sl_price, limit=tp_price)
