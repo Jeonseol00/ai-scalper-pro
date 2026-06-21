@@ -16,7 +16,7 @@ strategy("BTC AI Scalper Pro - Strategy", "₿ BTC AI Strat", overlay=true,
 grp1 = "📦 ORDER BLOCK"
 i_ob_on      = input.bool(true, "Enable", group=grp1)
 i_ob_len     = input.int(5, "Swing Length", 2, 20, group=grp1)
-i_ob_max     = input.int(5, "Max Zones", 1, 15, group=grp1)
+i_ob_max     = input.int(8, "Max Zones", 1, 15, group=grp1)
 i_ob_dem_col = input.color(color.new(#00E676, 78), "Demand Color", group=grp1)
 i_ob_sup_col = input.color(color.new(#FF1744, 78), "Supply Color", group=grp1)
 
@@ -62,8 +62,10 @@ i_fib_len = input.int(20, "Swing Length", 5, 50, group=grp8)
 grp9 = "🕐 CRYPTO VOLATILITY ZONES"
 i_ses_on      = input.bool(true, "Enable", group=grp9)
 i_ses_asia    = input.session("0000-0800", "Asian Session (UTC)", group=grp9)
+i_ses_london  = input.session("0700-1600", "London Session (UTC)", group=grp9)
 i_ses_us      = input.session("1330-2100", "US Session (UTC)", group=grp9)
 i_ses_asia_col = input.color(color.new(#1565C0, 93), "Asian BG", group=grp9)
+i_ses_lon_col = input.color(color.new(#2E7D32, 93), "London BG", group=grp9)
 i_ses_us_col  = input.color(color.new(#E65100, 93), "US BG", group=grp9)
 
 // --- Liquidity Sweep ---
@@ -83,7 +85,7 @@ i_dash_pos = input.string("Top Right", "Position", options=["Top Right","Top Lef
 
 // --- Strategy Settings ---
 grp_strat = "⚙️ STRATEGY SETTINGS"
-i_strat_min_score = input.int(5, "Minimum Confluence Score", 1, 8, group=grp_strat)
+i_strat_min_score = input.int(4, "Minimum Confluence Score", 1, 8, group=grp_strat)
 i_strat_sl_mult = input.float(2.0, "SL ATR Multiplier", step=0.1, group=grp_strat)
 i_strat_tp_mult = input.float(4.0, "TP ATR Multiplier", step=0.1, group=grp_strat)
 
@@ -345,9 +347,10 @@ if fib_updated and not na(fib_top) and not na(fib_bot) and fib_top != fib_bot an
 // ══════════════════════════════════════════════════════════════
 
 in_asia = i_ses_on and not na(time(timeframe.period, i_ses_asia, "UTC"))
+in_london = i_ses_on and not na(time(timeframe.period, i_ses_london, "UTC"))
 in_us     = i_ses_on and not na(time(timeframe.period, i_ses_us, "UTC"))
 
-bgcolor(in_asia and in_us ? color.new(#FF6F00, 92) : in_asia ? i_ses_asia_col : in_us ? i_ses_us_col : na)
+bgcolor(in_asia and in_london ? color.new(#FF6F00, 92) : in_london and in_us ? color.new(#FF6F00, 92) : in_asia ? i_ses_asia_col : in_london ? i_ses_lon_col : in_us ? i_ses_us_col : na)
 
 // ══════════════════════════════════════════════════════════════
 // SECTION 10: PLOTTING
@@ -425,7 +428,7 @@ score += (htf_bull and close > ema_f) or (not htf_bull and close < ema_f) ? 1 : 
 score += (htf_bull and bull_div) or (not htf_bull and bear_div) ? 1 : 0
 score += vsa_manip ? 1 : 0
 score += (htf_bull and bull_pin) or (not htf_bull and bear_pin) ? 1 : 0
-score += in_asia or in_us ? 1 : 0
+score += in_asia or in_london or in_us ? 1 : 0
 // FIX: Integrate sweep as 8th scoring component (Audit4 #B)
 score += (htf_bull and bull_sweep) or (not htf_bull and bear_sweep) ? 1 : 0
 
@@ -476,7 +479,7 @@ if i_dash_on and barstate.islast
     table.cell(dash, 1, 3, above_vwap ? "🟢 ABOVE" : "🔴 BELOW", text_color=above_vwap ? #00E676 : #FF1744, text_size=size.tiny)
 
     // Session
-    ses_txt = in_asia and in_us ? "🟠 ASIA+US" : in_asia ? "🔵 ASIAN VOL" : in_us ? "🟠 US VOL" : "⚫ LOW VOL"
+    ses_txt = in_london and in_us ? "🟠 LON+US" : in_asia and in_london ? "🟠 ASI+LON" : in_london ? "🟢 LON VOL" : in_asia ? "🔵 ASIAN VOL" : in_us ? "🟠 US VOL" : "⚫ LOW VOL"
     table.cell(dash, 0, 4, "Session", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
     table.cell(dash, 1, 4, ses_txt, text_color=#FFFFFF, text_size=size.tiny)
 
