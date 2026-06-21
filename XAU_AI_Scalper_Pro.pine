@@ -83,7 +83,7 @@ i_dash_pos = input.string("Top Right", "Position", options=["Top Right","Top Lef
 
 // --- Strategy Settings ---
 grp_strat = "⚙️ STRATEGY SETTINGS"
-i_strat_min_score = input.int(4, "Minimum Confluence Score", 1, 8, group=grp_strat)
+i_strat_min_score = input.int(5, "Minimum Confluence Score", 1, 8, group=grp_strat)
 i_strat_sl_mult = input.float(1.5, "SL ATR Multiplier", step=0.1, group=grp_strat)
 i_strat_tp_mult = input.float(2.5, "TP ATR Multiplier", step=0.1, group=grp_strat)
 
@@ -427,10 +427,14 @@ score += in_london or in_ny ? 1 : 0
 score += (htf_bull and bull_sweep) or (not htf_bull and bear_sweep) ? 1 : 0
 
 // FIX: sig_buy/sig_sell now trigger on OB OR sweep — widens detection window (Audit4 #B)
-mom_bull = bull_div or bull_pin or vsa_manip
-mom_bear = bear_div or bear_pin or vsa_manip
-sig_buy  = htf_bull and (at_dem_ob or bull_sweep) and mom_bull and score >= i_strat_min_score
-sig_sell = not htf_bull and (at_sup_ob or bear_sweep) and mom_bear and score >= i_strat_min_score
+// Separate gates to prevent sweep bypass from single vsa_manip
+ob_gate_bull    = bull_div or bull_pin or vsa_manip
+ob_gate_bear    = bear_div or bear_pin or vsa_manip
+sweep_gate_bull = bull_div
+sweep_gate_bear = bear_div
+
+sig_buy  = htf_bull and score >= i_strat_min_score and ((at_dem_ob and ob_gate_bull) or (bull_sweep and sweep_gate_bull))
+sig_sell = not htf_bull and score >= i_strat_min_score and ((at_sup_ob and ob_gate_bear) or (bear_sweep and sweep_gate_bear))
 
 // FIX: Plot sig_buy/sig_sell on chart for historical visual trail (Audit4 #A)
 plotshape(sig_buy, "Buy Zone", shape.triangleup, location.belowbar, color.new(#00E676, 0), size=size.small)
