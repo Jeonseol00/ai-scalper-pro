@@ -1,0 +1,560 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0
+// © XAU/USD AI Scalper Pro - Liquidity & Momentum System
+// Built for AI-Assisted Scalping with Setup Anticipation Method
+
+//@version=5
+strategy("XAU AI Scalper Pro - Strategy", "🤖 XAU AI Strat", overlay=true, 
+         initial_capital=1000, default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+         commission_type=strategy.commission.percent, commission_value=0.04, slippage=3,
+         max_boxes_count=200, max_lines_count=200, max_labels_count=200)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 1: INPUTS
+// ══════════════════════════════════════════════════════════════
+
+// --- Order Block ---
+grp1 = "📦 ORDER BLOCK"
+i_ob_on      = input.bool(true, "Enable", group=grp1)
+i_ob_len     = input.int(5, "Swing Length", 2, 20, group=grp1)
+i_ob_max     = input.int(5, "Max Zones", 1, 15, group=grp1)
+i_ob_dem_col = input.color(color.new(#00E676, 78), "Demand Color", group=grp1)
+i_ob_sup_col = input.color(color.new(#FF1744, 78), "Supply Color", group=grp1)
+
+// --- Fair Value Gap ---
+grp2 = "⚡ FAIR VALUE GAP"
+i_fvg_on      = input.bool(true, "Enable", group=grp2)
+i_fvg_bull_col = input.color(color.new(#00BCD4, 85), "Bullish FVG", group=grp2)
+i_fvg_bear_col = input.color(color.new(#FF9800, 85), "Bearish FVG", group=grp2)
+
+// --- EMA ---
+grp3 = "📈 EMA"
+i_ema_on   = input.bool(true, "Enable", group=grp3)
+i_ema_fast = input.int(21, "Fast Length", group=grp3)
+i_ema_slow = input.int(200, "Slow Length", group=grp3)
+
+// --- VWAP ---
+grp4 = "🏛️ VWAP"
+i_vwap_on = input.bool(true, "Enable", group=grp4)
+
+// --- RSI Divergence ---
+grp5 = "🔄 RSI DIVERGENCE"
+i_rsi_on  = input.bool(true, "Enable", group=grp5)
+i_rsi_len = input.int(14, "RSI Length", group=grp5)
+i_rsi_piv = input.int(5, "Pivot Lookback", 2, 15, group=grp5)
+
+// --- VSA ---
+grp6 = "📊 VOLUME SPREAD ANALYSIS"
+i_vsa_on   = input.bool(true, "Enable", group=grp6)
+i_vsa_mult = input.float(1.5, "Volume Multiplier", step=0.1, group=grp6)
+i_vsa_col  = input.color(#FFD600, "Manipulation Color", group=grp6)
+
+// --- Pin Bar ---
+grp7 = "💎 REJECTION DETECTOR"
+i_pin_on    = input.bool(true, "Enable", group=grp7)
+i_pin_ratio = input.float(2.0, "Wick/Body Ratio", step=0.1, group=grp7)
+
+// --- Fibonacci ---
+grp8 = "🎯 AUTO FIBONACCI"
+i_fib_on  = input.bool(true, "Enable", group=grp8)
+i_fib_len = input.int(20, "Swing Length", 5, 50, group=grp8)
+
+// --- Sessions ---
+grp9 = "🕐 SESSION KILLZONES"
+i_ses_on      = input.bool(true, "Enable", group=grp9)
+i_ses_london  = input.session("0700-1600", "London (UTC)", group=grp9)
+i_ses_ny      = input.session("1200-2100", "New York (UTC)", group=grp9)
+i_ses_lon_col = input.color(color.new(#1565C0, 93), "London BG", group=grp9)
+i_ses_ny_col  = input.color(color.new(#E65100, 93), "New York BG", group=grp9)
+
+// --- Liquidity Sweep ---
+grp_liq = "💧 LIQUIDITY SWEEP"
+i_sweep_on  = input.bool(true, "Enable", group=grp_liq)
+i_sweep_len = input.int(10, "Swing Lookback", 3, 30, group=grp_liq)
+
+// --- Previous Day High/Low ---
+grp_pdhl = "📏 PREV DAY H/L"
+i_pdhl_on = input.bool(true, "Enable", group=grp_pdhl)
+
+// --- Dashboard ---
+grp10 = "🤖 AI DASHBOARD"
+i_dash_on  = input.bool(true, "Enable", group=grp10)
+i_atr_len  = input.int(14, "ATR Length", group=grp10)
+i_dash_pos = input.string("Top Right", "Position", options=["Top Right","Top Left","Bottom Right","Bottom Left"], group=grp10)
+
+// --- Strategy Settings ---
+grp_strat = "⚙️ STRATEGY SETTINGS"
+i_strat_min_score = input.int(4, "Minimum Confluence Score", 1, 8, group=grp_strat)
+i_strat_sl_mult = input.float(2.0, "SL ATR Multiplier", step=0.1, group=grp_strat)
+i_strat_tp_mult = input.float(2.5, "TP ATR Multiplier", step=0.1, group=grp_strat)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 2: CORE CALCULATIONS
+// ══════════════════════════════════════════════════════════════
+
+ema_f = ta.ema(close, i_ema_fast)
+ema_s = ta.ema(close, i_ema_slow)
+vwap_val = ta.vwap(hlc3)
+atr_val = ta.atr(i_atr_len)
+rsi_val = ta.rsi(close, i_rsi_len)
+vol_avg = ta.sma(volume, 20)
+
+// --- HTF Data (H1) ---
+// FIX: Removed lookahead_on to prevent repainting (Audit #1)
+htf_ema200 = request.security(syminfo.tickerid, "60", ta.ema(close, 200))
+htf_bull = close > htf_ema200
+
+// --- Candle Metrics ---
+body      = math.abs(close - open)
+upper_w   = high - math.max(close, open)
+lower_w   = math.min(close, open) - low
+full_range = high - low
+is_bull_c = close > open
+is_bear_c = close < open
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 3: ORDER BLOCKS
+// ══════════════════════════════════════════════════════════════
+
+// FIX: Separate demand/supply arrays with independent caps (Audit #8)
+var box[] ob_dem_boxes = array.new<box>()
+var box[] ob_sup_boxes = array.new<box>()
+
+swing_lo = ta.pivotlow(low, i_ob_len, i_ob_len)
+swing_hi = ta.pivothigh(high, i_ob_len, i_ob_len)
+
+// FIX: Added displacement check — OB only valid if followed by impulsive move (Audit #4)
+if i_ob_on and not na(swing_lo)
+    int idx = bar_index - i_ob_len
+    float ob_top = math.max(open[i_ob_len], close[i_ob_len])
+    float ob_bot = low[i_ob_len]
+    // FIX: Use atr_val[disp_idx] so ATR matches the candle's own volatility context (Audit2 #a)
+    bool has_displacement = false
+    for k = 1 to math.min(i_ob_len - 1, 3)
+        disp_idx = i_ob_len - k
+        if close[disp_idx] > open[disp_idx] and (close[disp_idx] - open[disp_idx]) > atr_val[disp_idx] * 0.5
+            has_displacement := true
+            break
+    if has_displacement
+        box b = box.new(idx, ob_top, bar_index + 50, ob_bot, border_color=color.new(i_ob_dem_col, 50), bgcolor=i_ob_dem_col, border_width=1)
+        array.push(ob_dem_boxes, b)
+        if array.size(ob_dem_boxes) > i_ob_max
+            box.delete(array.shift(ob_dem_boxes))
+
+if i_ob_on and not na(swing_hi)
+    int idx = bar_index - i_ob_len
+    float ob_top = high[i_ob_len]
+    float ob_bot = math.min(open[i_ob_len], close[i_ob_len])
+    // FIX: Use atr_val[disp_idx] for historical ATR context (Audit2 #a)
+    bool has_displacement = false
+    for k = 1 to math.min(i_ob_len - 1, 3)
+        disp_idx = i_ob_len - k
+        if close[disp_idx] < open[disp_idx] and (open[disp_idx] - close[disp_idx]) > atr_val[disp_idx] * 0.5
+            has_displacement := true
+            break
+    if has_displacement
+        box b = box.new(idx, ob_top, bar_index + 50, ob_bot, border_color=color.new(i_ob_sup_col, 50), bgcolor=i_ob_sup_col, border_width=1)
+        array.push(ob_sup_boxes, b)
+        if array.size(ob_sup_boxes) > i_ob_max
+            box.delete(array.shift(ob_sup_boxes))
+
+// Mitigate OBs (remove when price passes through)
+if array.size(ob_dem_boxes) > 0
+    for i = array.size(ob_dem_boxes) - 1 to 0
+        b = array.get(ob_dem_boxes, i)
+        if close < box.get_bottom(b)
+            box.delete(b)
+            array.remove(ob_dem_boxes, i)
+        else
+            box.set_right(b, bar_index + 20)
+
+if array.size(ob_sup_boxes) > 0
+    for i = array.size(ob_sup_boxes) - 1 to 0
+        b = array.get(ob_sup_boxes, i)
+        if close > box.get_top(b)
+            box.delete(b)
+            array.remove(ob_sup_boxes, i)
+        else
+            box.set_right(b, bar_index + 20)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 4: FAIR VALUE GAPS
+// ══════════════════════════════════════════════════════════════
+
+var box[] fvg_boxes = array.new<box>()
+var int[] fvg_types = array.new<int>() // 1=bullish, -1=bearish
+
+bull_fvg = i_fvg_on and low > high[2] and low - high[2] > atr_val * 0.1
+bear_fvg = i_fvg_on and high < low[2] and low[2] - high > atr_val * 0.1
+
+if bull_fvg
+    box b = box.new(bar_index - 1, low, bar_index + 30, high[2], border_color=color.new(i_fvg_bull_col, 60), bgcolor=i_fvg_bull_col, border_width=1)
+    array.push(fvg_boxes, b)
+    array.push(fvg_types, 1)
+    if array.size(fvg_boxes) > 10
+        box.delete(array.shift(fvg_boxes))
+        array.shift(fvg_types)
+
+if bear_fvg
+    box b = box.new(bar_index - 1, low[2], bar_index + 30, high, border_color=color.new(i_fvg_bear_col, 60), bgcolor=i_fvg_bear_col, border_width=1)
+    array.push(fvg_boxes, b)
+    array.push(fvg_types, -1)
+    if array.size(fvg_boxes) > 10
+        box.delete(array.shift(fvg_boxes))
+        array.shift(fvg_types)
+
+// FIX: FVG mitigation — remove filled gaps instead of extending indefinitely (Audit #5)
+if array.size(fvg_boxes) > 0
+    for i = array.size(fvg_boxes) - 1 to 0
+        b = array.get(fvg_boxes, i)
+        ft = array.get(fvg_types, i)
+        fvg_top = box.get_top(b)
+        fvg_bot = box.get_bottom(b)
+        filled = (ft == 1 and low <= fvg_bot) or (ft == -1 and high >= fvg_top)
+        if filled
+            box.delete(b)
+            array.remove(fvg_boxes, i)
+            array.remove(fvg_types, i)
+        else
+            box.set_right(b, bar_index + 10)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 5: RSI DIVERGENCE
+// ══════════════════════════════════════════════════════════════
+
+var float prev_rsi_lo = na
+var float prev_price_lo = na
+var int prev_lo_idx = na
+var float prev_rsi_hi = na
+var float prev_price_hi = na
+var int prev_hi_idx = na
+
+p_lo = ta.pivotlow(rsi_val, i_rsi_piv, i_rsi_piv)
+p_hi = ta.pivothigh(rsi_val, i_rsi_piv, i_rsi_piv)
+
+bull_div = false
+bear_div = false
+
+if i_rsi_on and not na(p_lo)
+    curr_rsi = rsi_val[i_rsi_piv]
+    curr_price = low[i_rsi_piv]
+    if not na(prev_rsi_lo) and curr_price < prev_price_lo and curr_rsi > prev_rsi_lo
+        bull_div := true
+        line.new(prev_lo_idx, prev_price_lo, bar_index - i_rsi_piv, curr_price, color=#00E676, style=line.style_dotted, width=2)
+        label.new(bar_index - i_rsi_piv, curr_price, "🔺 Bull Div", style=label.style_label_up, color=color.new(#00E676, 20), textcolor=color.white, size=size.small)
+    prev_rsi_lo := curr_rsi
+    prev_price_lo := curr_price
+    prev_lo_idx := bar_index - i_rsi_piv
+
+if i_rsi_on and not na(p_hi)
+    curr_rsi = rsi_val[i_rsi_piv]
+    curr_price = high[i_rsi_piv]
+    if not na(prev_rsi_hi) and curr_price > prev_price_hi and curr_rsi < prev_rsi_hi
+        bear_div := true
+        line.new(prev_hi_idx, prev_price_hi, bar_index - i_rsi_piv, curr_price, color=#FF1744, style=line.style_dotted, width=2)
+        label.new(bar_index - i_rsi_piv, curr_price, "🔻 Bear Div", style=label.style_label_down, color=color.new(#FF1744, 20), textcolor=color.white, size=size.small)
+    prev_rsi_hi := curr_rsi
+    prev_price_hi := curr_price
+    prev_hi_idx := bar_index - i_rsi_piv
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 6: VSA (Volume Spread Analysis)
+// ══════════════════════════════════════════════════════════════
+
+is_high_vol = volume > vol_avg * i_vsa_mult
+is_small_body = body < full_range * 0.35
+vsa_manip = i_vsa_on and is_high_vol and is_small_body and full_range > 0
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 7: PIN BAR / REJECTION
+// ══════════════════════════════════════════════════════════════
+
+bull_pin = i_pin_on and lower_w > body * i_pin_ratio and lower_w > upper_w * 1.5 and body > 0
+bear_pin = i_pin_on and upper_w > body * i_pin_ratio and upper_w > lower_w * 1.5 and body > 0
+
+plotshape(bull_pin, "Bull Rejection", shape.diamond, location.belowbar, #00E676, size=size.small)
+plotshape(bear_pin, "Bear Rejection", shape.diamond, location.abovebar, #FF1744, size=size.small)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 8: AUTO FIBONACCI
+// ══════════════════════════════════════════════════════════════
+
+var line[] fib_lines = array.new<line>()
+var label[] fib_labels = array.new<label>()
+
+fib_hi = ta.pivothigh(high, i_fib_len, i_fib_len)
+fib_lo = ta.pivotlow(low, i_fib_len, i_fib_len)
+
+var float fib_top = na
+var float fib_bot = na
+var bool fib_updated = false
+// FIX: Track bar_index of each pivot for leg-coherence validation (Audit2 #c)
+var int fib_top_bar = na
+var int fib_bot_bar = na
+
+if i_fib_on and not na(fib_hi)
+    fib_top := high[i_fib_len]
+    fib_top_bar := bar_index - i_fib_len
+    fib_updated := true
+if i_fib_on and not na(fib_lo)
+    fib_bot := low[i_fib_len]
+    fib_bot_bar := bar_index - i_fib_len
+    fib_updated := true
+
+// FIX: Ensure fib_top > fib_bot (swap if inverted)
+if not na(fib_top) and not na(fib_bot) and fib_top < fib_bot
+    temp = fib_top
+    fib_top := fib_bot
+    fib_bot := temp
+    temp_bar = fib_top_bar
+    fib_top_bar := fib_bot_bar
+    fib_bot_bar := temp_bar
+
+// FIX: Leg-coherence — only draw fib if both pivots are from the same leg (Audit2 #c)
+fib_leg_valid = not na(fib_top_bar) and not na(fib_bot_bar) and fib_top_bar != fib_bot_bar and math.abs(fib_top_bar - fib_bot_bar) <= i_fib_len * 4
+
+if fib_updated and not na(fib_top) and not na(fib_bot) and fib_top != fib_bot and fib_leg_valid
+    // Clear old fibs (must check size > 0 to avoid Pine Script for-loop gotcha)
+    if array.size(fib_lines) > 0
+        for i = 0 to array.size(fib_lines) - 1
+            line.delete(array.get(fib_lines, i))
+        array.clear(fib_lines)
+    if array.size(fib_labels) > 0
+        for i = 0 to array.size(fib_labels) - 1
+            label.delete(array.get(fib_labels, i))
+        array.clear(fib_labels)
+
+    diff = fib_top - fib_bot
+    fib_lvls  = array.from(0.0, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618, 2.0)
+    fib_names = array.from("0%", "38.2%", "50%", "61.8%", "78.6%", "100%", "127.2% TP1", "161.8% TP2", "200% TP3")
+    fib_cols  = array.from(#787B86, #F44336, #FF9800, #FFEB3B, #4CAF50, #2196F3, #00E676, #00E676, #E040FB)
+
+    for i = 0 to array.size(fib_lvls) - 1
+        lvl = fib_bot + diff * array.get(fib_lvls, i)
+        c = array.get(fib_cols, i)
+        l = line.new(bar_index - i_fib_len * 2, lvl, bar_index + 20, lvl, color=c, style=line.style_dashed, width=1)
+        lb = label.new(bar_index + 22, lvl, array.get(fib_names, i) + " (" + str.tostring(lvl, "#.##") + ")", style=label.style_none, textcolor=c, size=size.tiny)
+        array.push(fib_lines, l)
+        array.push(fib_labels, lb)
+    fib_updated := false
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 9: SESSIONS
+// ══════════════════════════════════════════════════════════════
+
+in_london = i_ses_on and not na(time(timeframe.period, i_ses_london, "UTC"))
+in_ny     = i_ses_on and not na(time(timeframe.period, i_ses_ny, "UTC"))
+
+bgcolor(in_london and in_ny ? color.new(#FF6F00, 92) : in_london ? i_ses_lon_col : in_ny ? i_ses_ny_col : na)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 10: PLOTTING
+// ══════════════════════════════════════════════════════════════
+
+plot(i_ema_on ? ema_f : na, "EMA Fast", #FFEB3B, 2)
+plot(i_ema_on ? ema_s : na, "EMA Slow", #E040FB, 2)
+plot(i_vwap_on ? vwap_val : na, "VWAP", #2196F3, 2, plot.style_circles)
+
+// VSA Candle coloring
+barcolor(vsa_manip ? i_vsa_col : na)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 11: LIQUIDITY SWEEP DETECTOR
+// ══════════════════════════════════════════════════════════════
+
+// FIX: Use structural swing pivots for proper SMC sweep detection instead of trailing lowest/highest
+sweep_pivot_hi = ta.pivothigh(high, i_sweep_len, i_sweep_len)
+sweep_pivot_lo = ta.pivotlow(low, i_sweep_len, i_sweep_len)
+
+var float last_swing_hi = na
+var float last_swing_lo = na
+
+if not na(sweep_pivot_hi)
+    last_swing_hi := high[i_sweep_len]
+if not na(sweep_pivot_lo)
+    last_swing_lo := low[i_sweep_len]
+
+bull_sweep = false
+bear_sweep = false
+
+if i_sweep_on
+    // Bull Sweep: wick below last confirmed swing low, but close above it (bullish rejection)
+    // FIX: Removed candle color requirement (close > open / close < open) — sweep validity
+    // is defined by wick exceeding level + close recovering back inside, regardless of candle color (Audit4 #C)
+    if not na(last_swing_lo) and low < last_swing_lo and close > last_swing_lo
+        bull_sweep := true
+        last_swing_lo := na // Clear to prevent multiple sweep signals on the same level
+
+    // Bear Sweep: wick above last confirmed swing high, but close below it
+    if not na(last_swing_hi) and high > last_swing_hi and close < last_swing_hi
+        bear_sweep := true
+        last_swing_hi := na // Clear
+
+plotshape(bull_sweep, "Bull Sweep", shape.labelup, location.belowbar, #00BCD4, text="💧", textcolor=#00BCD4, size=size.tiny)
+plotshape(bear_sweep, "Bear Sweep", shape.labeldown, location.abovebar, #FF5722, text="💧", textcolor=#FF5722, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 12: CONFLUENCE SCORING
+// ══════════════════════════════════════════════════════════════
+
+// Check if price is near any OB (now uses separated arrays)
+at_ob = false
+at_dem_ob = false
+at_sup_ob = false
+if array.size(ob_dem_boxes) > 0
+    for i = 0 to array.size(ob_dem_boxes) - 1
+        b = array.get(ob_dem_boxes, i)
+        if close <= box.get_top(b) and close >= box.get_bottom(b)
+            at_dem_ob := true
+            at_ob := true
+            break
+if array.size(ob_sup_boxes) > 0
+    for i = 0 to array.size(ob_sup_boxes) - 1
+        b = array.get(ob_sup_boxes, i)
+        if close <= box.get_top(b) and close >= box.get_bottom(b)
+            at_sup_ob := true
+            at_ob := true
+            break
+
+score = 0
+score += at_ob ? 1 : 0
+score += (htf_bull and close > vwap_val) or (not htf_bull and close < vwap_val) ? 1 : 0
+score += (htf_bull and close > ema_f) or (not htf_bull and close < ema_f) ? 1 : 0
+score += (htf_bull and bull_div) or (not htf_bull and bear_div) ? 1 : 0
+score += vsa_manip ? 1 : 0
+score += (htf_bull and bull_pin) or (not htf_bull and bear_pin) ? 1 : 0
+score += in_london or in_ny ? 1 : 0
+// FIX: Integrate sweep as 8th scoring component (Audit4 #B)
+score += (htf_bull and bull_sweep) or (not htf_bull and bear_sweep) ? 1 : 0
+
+// FIX: sig_buy/sig_sell now trigger on OB OR sweep — widens detection window (Audit4 #B)
+sig_buy  = htf_bull and (at_dem_ob or bull_sweep) and score >= i_strat_min_score
+sig_sell = not htf_bull and (at_sup_ob or bear_sweep) and score >= i_strat_min_score
+
+// FIX: Plot sig_buy/sig_sell on chart for historical visual trail (Audit4 #A)
+plotshape(sig_buy, "Buy Zone", shape.triangleup, location.belowbar, color.new(#00E676, 0), size=size.small)
+plotshape(sig_sell, "Sell Zone", shape.triangledown, location.abovebar, color.new(#FF1744, 0), size=size.small)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 13: AI DASHBOARD
+// ══════════════════════════════════════════════════════════════
+
+if i_dash_on and barstate.islast
+    pos = switch i_dash_pos
+        "Top Right"    => position.top_right
+        "Top Left"     => position.top_left
+        "Bottom Right"  => position.bottom_right
+        => position.bottom_left
+
+    var table dash = table.new(pos, 2, 12, bgcolor=color.new(#1a1a2e, 5), frame_width=2, frame_color=#FFD700, border_width=1, border_color=color.new(#FFD700, 70))
+
+    // Header
+    table.cell(dash, 0, 0, "🤖 XAU AI SCALPER", text_color=#FFD700, text_size=size.small, bgcolor=color.new(#0f0f23, 0))
+    table.merge_cells(dash, 0, 0, 1, 0)
+
+    // H1 Trend
+    h1_txt = htf_bull ? "🟢 BULLISH" : "🔴 BEARISH"
+    table.cell(dash, 0, 1, "H1 Trend", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 1, h1_txt, text_color=htf_bull ? #00E676 : #FF1744, text_size=size.tiny)
+
+    // Current TF Trend (dynamic label instead of hardcoded "M5")
+    m5_bull = close > ema_f
+    table.cell(dash, 0, 2, timeframe.period + " Trend", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 2, m5_bull ? "🟢 BULLISH" : "🔴 BEARISH", text_color=m5_bull ? #00E676 : #FF1744, text_size=size.tiny)
+
+    // VWAP
+    above_vwap = close > vwap_val
+    table.cell(dash, 0, 3, "VWAP Bias", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 3, above_vwap ? "🟢 ABOVE" : "🔴 BELOW", text_color=above_vwap ? #00E676 : #FF1744, text_size=size.tiny)
+
+    // Session
+    ses_txt = in_london and in_ny ? "🟠 LON+NY" : in_london ? "🔵 LONDON" : in_ny ? "🟠 NEW YORK" : "⚫ OFF-HOURS"
+    table.cell(dash, 0, 4, "Session", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 4, ses_txt, text_color=#FFFFFF, text_size=size.tiny)
+
+    // RSI
+    rsi_col = rsi_val > 70 ? #FF1744 : rsi_val < 30 ? #00E676 : #FFFFFF
+    table.cell(dash, 0, 5, "RSI (" + str.tostring(i_rsi_len) + ")", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 5, str.tostring(rsi_val, "#.#"), text_color=rsi_col, text_size=size.tiny)
+
+    // ATR
+    table.cell(dash, 0, 6, "ATR (" + str.tostring(i_atr_len) + ")", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 6, str.tostring(atr_val, "#.##"), text_color=#FFD700, text_size=size.tiny)
+
+    // SL suggestion
+    sl_val = atr_val * 1.5
+    table.cell(dash, 0, 7, "SL (1.5×ATR)", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 7, str.tostring(sl_val, "#.##"), text_color=#FF9800, text_size=size.tiny)
+
+    // Volume
+    vol_status = is_high_vol ? "⚡ HIGH" : "📊 NORMAL"
+    table.cell(dash, 0, 8, "Volume", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 8, vol_status, text_color=is_high_vol ? #FFD600 : #B0BEC5, text_size=size.tiny)
+
+    // Confluence Score
+    // FIX: Updated to /8 max score after sweep integration (Audit4 #B)
+    score_stars = score >= 6 ? "★★★★★" : score == 5 ? "★★★★☆" : score >= 3 ? "★★★☆☆" : score == 2 ? "★★☆☆☆" : "★☆☆☆☆"
+    score_col = score >= 5 ? #00E676 : score >= 3 ? #FFEB3B : #FF1744
+    table.cell(dash, 0, 9, "Confluence", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 9, score_stars + " (" + str.tostring(score) + "/8)", text_color=score_col, text_size=size.tiny)
+
+    // Signal (uses global sig_buy/sig_sell from Section 11)
+    sig_txt = sig_buy ? "🟢 BUY ZONE" : sig_sell ? "🔴 SELL ZONE" : "⚪ NO SIGNAL"
+    sig_col = sig_buy ? #00E676 : sig_sell ? #FF1744 : #787B86
+    table.cell(dash, 0, 10, "Signal", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, 10, sig_txt, text_color=sig_col, text_size=size.tiny)
+
+    // Tip
+    // FIX: Updated tip thresholds for 8-component scoring (Audit4)
+    tip = score >= 5 ? "💡 Wait for 💎 rejection" : score >= 3 ? "💡 Need more confluence" : "💡 Stay patient"
+    table.cell(dash, 0, 11, tip, text_color=#FFD700, text_size=size.tiny, bgcolor=color.new(#0f0f23, 0))
+    table.merge_cells(dash, 0, 11, 1, 11)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 14: PREVIOUS DAY HIGH / LOW
+// ══════════════════════════════════════════════════════════════
+
+prev_d_hi = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+prev_d_lo = request.security(syminfo.tickerid, "D", low[1], lookahead=barmerge.lookahead_on)
+
+plot(i_pdhl_on ? prev_d_hi : na, "PDH", #FF5252, 1, plot.style_linebr)
+plot(i_pdhl_on ? prev_d_lo : na, "PDL", #69F0AE, 1, plot.style_linebr)
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 15: ALERTS
+// ══════════════════════════════════════════════════════════════
+
+// FIX: Edge-detected alerts for sig_buy/sig_sell so they fire once, not every bar (Audit3)
+alertcondition(sig_buy and not sig_buy[1], "🟢 BUY ZONE Triggered", "XAU AI: BUY ZONE — bullish bias + demand OB + score ≥3")
+alertcondition(sig_sell and not sig_sell[1], "🔴 SELL ZONE Triggered", "XAU AI: SELL ZONE — bearish bias + supply OB + score ≥3")
+alertcondition(score >= 4 and (bull_pin or bear_pin), "⚡ High Confluence + Rejection", "XAU AI: Rejection detected at key level!")
+alertcondition(bull_sweep, "💧 Bullish Liquidity Sweep", "XAU AI: Bullish sweep — price swept recent lows!")
+alertcondition(bear_sweep, "💧 Bearish Liquidity Sweep", "XAU AI: Bearish sweep — price swept recent highs!")
+alertcondition(bull_div, "🔺 Bullish Divergence", "XAU AI: Bullish RSI Divergence detected!")
+alertcondition(bear_div, "🔻 Bearish Divergence", "XAU AI: Bearish RSI Divergence detected!")
+
+// ══════════════════════════════════════════════════════════════
+// SECTION 16: STRATEGY EXECUTION
+// ══════════════════════════════════════════════════════════════
+
+var float sl_price = na
+var float tp_price = na
+
+if sig_buy and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+    sl_price := close - (atr_val * i_strat_sl_mult)
+    tp_price := close + (atr_val * i_strat_tp_mult)
+
+if sig_sell and strategy.position_size == 0
+    strategy.entry("Short", strategy.short)
+    sl_price := close + (atr_val * i_strat_sl_mult)
+    tp_price := close - (atr_val * i_strat_tp_mult)
+
+if strategy.position_size > 0
+    strategy.exit("Exit Long", "Long", stop=sl_price, limit=tp_price)
+
+if strategy.position_size < 0
+    strategy.exit("Exit Short", "Short", stop=sl_price, limit=tp_price)
+
+// Visual plotting of active TP and SL lines for open trades
+plot(strategy.position_size != 0 ? sl_price : na, "Active SL", color=color.new(#FF1744, 20), style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size != 0 ? tp_price : na, "Active TP", color=color.new(#00E676, 20), style=plot.style_linebr, linewidth=2)
