@@ -83,7 +83,7 @@ i_dash_pos = input.string("Top Right", "Position", options=["Top Right","Top Lef
 
 // --- Strategy Settings ---
 grp_strat = "⚙️ STRATEGY SETTINGS"
-i_strat_min_score = input.int(4, "Minimum Confluence Score", 1, 8, group=grp_strat)
+i_strat_min_score = input.int(4, "Minimum Confluence Score", 1, 9, group=grp_strat)
 i_strat_sl_mult = input.float(1.5, "SL ATR Multiplier", step=0.1, group=grp_strat)
 i_strat_tp_mult = input.float(2.5, "TP ATR Multiplier", step=0.1, group=grp_strat)
 
@@ -98,10 +98,12 @@ atr_val = ta.atr(i_atr_len)
 rsi_val = ta.rsi(close, i_rsi_len)
 vol_avg = ta.sma(volume, 20)
 
-// --- HTF Data (H1) ---
-// FIX: Removed lookahead_on to prevent repainting (Audit #1)
+// --- HTF & MTF Bias ---
 htf_ema200 = request.security(syminfo.tickerid, "60", ta.ema(close, 200))
 htf_bull = close > htf_ema200
+
+mtf_ema200 = request.security(syminfo.tickerid, "15", ta.ema(close, 200))
+mtf_bull = close > mtf_ema200
 
 // --- Candle Metrics ---
 body      = math.abs(close - open)
@@ -425,6 +427,8 @@ score += (htf_bull and bull_pin) or (not htf_bull and bear_pin) ? 1 : 0
 score += in_london or in_ny ? 1 : 0
 // FIX: Integrate sweep as 8th scoring component (Audit4 #B)
 score += (htf_bull and bull_sweep) or (not htf_bull and bear_sweep) ? 1 : 0
+// FIX: Add MTF (15m) trend alignment as 9th scoring component (Triple Screen)
+score += (htf_bull and mtf_bull) or (not htf_bull and not mtf_bull) ? 1 : 0
 
 // FIX: sig_buy/sig_sell now trigger on OB OR sweep — widens detection window (Audit4 #B)
 // Separate gates to prevent sweep bypass from single vsa_manip
@@ -497,11 +501,11 @@ if i_dash_on and barstate.islast
     table.cell(dash, 1, 8, vol_status, text_color=is_high_vol ? #FFD600 : #B0BEC5, text_size=size.tiny)
 
     // Confluence Score
-    // FIX: Updated to /8 max score after sweep integration (Audit4 #B)
-    score_stars = score >= 6 ? "★★★★★" : score == 5 ? "★★★★☆" : score >= 3 ? "★★★☆☆" : score == 2 ? "★★☆☆☆" : "★☆☆☆☆"
+    // FIX: Updated to /9 max score after MTF alignment integration
+    score_stars = score >= 7 ? "★★★★★" : score >= 5 ? "★★★★☆" : score >= 3 ? "★★★☆☆" : score == 2 ? "★★☆☆☆" : "★☆☆☆☆"
     score_col = score >= 5 ? #00E676 : score >= 3 ? #FFEB3B : #FF1744
     table.cell(dash, 0, 9, "Confluence", text_color=#B0BEC5, text_size=size.tiny, text_halign=text.align_left)
-    table.cell(dash, 1, 9, score_stars + " (" + str.tostring(score) + "/8)", text_color=score_col, text_size=size.tiny)
+    table.cell(dash, 1, 9, score_stars + " (" + str.tostring(score) + "/9)", text_color=score_col, text_size=size.tiny)
 
     // Signal (uses global sig_buy/sig_sell from Section 11)
     sig_txt = sig_buy ? "🟢 BUY ZONE" : sig_sell ? "🔴 SELL ZONE" : "⚪ NO SIGNAL"
